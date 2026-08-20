@@ -1,0 +1,53 @@
+{
+  "timestamp": "2026-08-20T11:18:29.022109",
+  "summary": {
+    "num_cases": 5,
+    "avg_recall_at_5": 0.0,
+    "avg_recall_at_10": 0.0,
+    "avg_precision_at_5": 0.0,
+    "avg_precision_at_10": 0.0,
+    "avg_mrr": 0.0
+  },
+  "results": [
+    {
+      "query": "experience with Python and machine learning",
+      "recall_at_5": 0.0,
+      "recall_at_10": 0.0,
+      "precision_at_5": 0.0,
+      "precision_at_10": 0.0,
+      "reciprocal_rank": 0.0
+    },
+    {
+      "query": "leadership and team management experience",
+      "recall_at_5": 0.0,
+      "recall_at_10": 0.0,
+      "precision_at_5": 0.0,
+      "precision_at_10": 0.0,
+      "reciprocal_rank": 0.0
+    },
+    {
+      "query": "frontend development with React and TypeScript",
+      "recall_at_5": 0.0,
+      "recall_at_10": 0.0,
+      "precision_at_5": 0.0,
+      "precision_at_10": 0.0,
+      "reciprocal_rank": 0.0
+    },
+    {
+      "query": "database experience PostgreSQL MongoDB",
+      "recall_at_5": 0.0,
+      "recall_at_10": 0.0,
+      "precision_at_5": 0.0,
+      "precision_at_10": 0.0,
+      "reciprocal_rank": 0.0
+    },
+    {
+      "query": "cloud infrastructure AWS GCP Kubernetes",
+      "recall_at_5": 0.0,
+      "recall_at_10": 0.0,
+      "precision_at_5": 0.0,
+      "precision_at_10": 0.0,
+      "reciprocal_rank": 0.0
+    }
+  ]
+}
