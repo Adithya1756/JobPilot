@@ -1,56 +1,58 @@
 """
-Embedding service - generates embeddings using OpenAI's API.
+Embedding service using Google Gemini's gemini-embedding-001 model.
 
-Why text-embedding-3-small:
-- Cost-effective ($0.02/1M tokens vs $0.13 for large)
-- 1536 dimensions - good balance of quality and storage
-- Solid performance on semantic similarity tasks
+Why gemini-embedding-001:
+- FREE tier available (no credit card required)
+- 768 dimensions via Matryoshka Representation Learning (MRL)
+  (default is 3072, but we request 768 to match our DB schema)
+- Multilingual support (100+ languages)
+- Replaced deprecated text-embedding-004
 
-For production at scale, consider:
-- Voyage AI embeddings (often better for code/technical content)
-- Local embedding models (no API cost, but requires GPU)
+This is the only embedding provider we use - keeps the project simple
+and free to run.
 """
 
 from typing import List, Optional
-import httpx
-from openai import AsyncOpenAI
+from google import genai
+from google.genai import types
 
 from app.core.config import settings
 
 
 class EmbeddingService:
     """
-    Generates embeddings for text content.
-
-    The embedding model converts text into a dense vector (list of floats)
-    where semantically similar texts have similar vectors (measured by cosine similarity).
+    Generates embeddings for text content using Google Gemini.
     """
 
     def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
-        self.api_key = api_key or settings.openai_api_key
+        self.api_key = api_key or settings.gemini_api_key
         self.model = model or settings.embedding_model
-        self.client = AsyncOpenAI(api_key=self.api_key) if self.api_key else None
+        self.dimensions = settings.embedding_dimensions
+
+        if self.api_key:
+            self.client = genai.Client(api_key=self.api_key)
+        else:
+            self.client = None
 
     async def embed_text(self, text: str) -> Optional[List[float]]:
         """
         Generate embedding for a single text.
 
-        Args:
-            text: Text to embed
-
         Returns:
             List of floats (the embedding vector), or None if API not configured
         """
         if not self.client:
-            # Return None if API key not configured (for local dev without embeddings)
             return None
 
         try:
-            response = await self.client.embeddings.create(
+            response = self.client.models.embed_content(
                 model=self.model,
-                input=text
+                contents=text,
+                config=types.EmbedContentConfig(
+                    output_dimensionality=self.dimensions
+                )
             )
-            return response.data[0].embedding
+            return response.embeddings[0].values
         except Exception as e:
             print(f"Error generating embedding: {e}")
             return None
@@ -58,9 +60,6 @@ class EmbeddingService:
     async def embed_batch(self, texts: List[str], batch_size: int = 100) -> List[Optional[List[float]]]:
         """
         Generate embeddings for multiple texts.
-
-        OpenAI API allows up to ~2048 inputs per request, but we batch
-        smaller to be safe and track progress.
 
         Args:
             texts: List of texts to embed
@@ -74,24 +73,13 @@ class EmbeddingService:
 
         embeddings = []
 
-        for i in range(0, len(texts), batch_size):
-            batch = texts[i:i + batch_size]
-
+        for text in texts:
             try:
-                response = await self.client.embeddings.create(
-                    model=self.model,
-                    input=batch
-                )
-
-                # Sort by index to ensure correct order
-                sorted_data = sorted(response.data, key=lambda x: x.index)
-                batch_embeddings = [item.embedding for item in sorted_data]
-                embeddings.extend(batch_embeddings)
-
+                embedding = await self.embed_text(text)
+                embeddings.append(embedding)
             except Exception as e:
-                print(f"Error in batch {i // batch_size}: {e}")
-                # Add None placeholders for failed batch
-                embeddings.extend([None] * len(batch))
+                print(f"Error embedding text: {e}")
+                embeddings.append(None)
 
         return embeddings
 
@@ -109,28 +97,12 @@ def get_embedding_service() -> EmbeddingService:
 
 
 async def embed_texts(texts: List[str]) -> List[Optional[List[float]]]:
-    """
-    Convenience function to embed multiple texts.
-
-    Args:
-        texts: List of texts to embed
-
-    Returns:
-        List of embeddings (same order as input texts)
-    """
+    """Convenience function to embed multiple texts."""
     service = get_embedding_service()
     return await service.embed_batch(texts)
 
 
 async def embed_text(text: str) -> Optional[List[float]]:
-    """
-    Convenience function to embed a single text.
-
-    Args:
-        text: Text to embed
-
-    Returns:
-        Embedding vector or None if not configured
-    """
+    """Convenience function to embed a single text."""
     service = get_embedding_service()
     return await service.embed_text(text)

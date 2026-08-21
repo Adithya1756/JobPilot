@@ -17,35 +17,18 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 30
     refresh_token_expire_days: int = 7
 
-    # LLM APIs
-    anthropic_api_key: Optional[str] = None
-    openai_api_key: Optional[str] = None
+    # Google Gemini API (FREE tier - get key at https://aistudio.google.com)
+    gemini_api_key: Optional[str] = None
 
-    # Reranking (Cohere)
-    cohere_api_key: Optional[str] = None
+    # Embeddings (using gemini-embedding-001, 768 dims via MRL)
+    embedding_model: str = "gemini-embedding-001"
+    embedding_dimensions: int = 768
 
-    # Web Search APIs
-    tavily_api_key: Optional[str] = None
-    serper_api_key: Optional[str] = None
-
-    # Google Calendar API
-    google_client_id: Optional[str] = None
-    google_client_secret: Optional[str] = None
-    google_refresh_token: Optional[str] = None
-
-    # Embeddings
-    embedding_model: str = "text-embedding-3-small"
-    embedding_dimensions: int = 1536
+    # LLM (using Gemini 3.5 Flash - free tier)
+    llm_model: str = "gemini-3.5-flash"
 
     # File storage
-    s3_bucket: Optional[str] = None
-    s3_access_key: Optional[str] = None
-    s3_secret_key: Optional[str] = None
-    s3_endpoint: Optional[str] = None  # For Supabase Storage or other S3-compatible
-    upload_dir: str = "uploads"  # Local fallback
-
-    # Redis (for Celery)
-    redis_url: str = "redis://localhost:6379/0"
+    upload_dir: str = "uploads"
 
     # App
     app_name: str = "JobPilot API"

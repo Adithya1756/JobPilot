@@ -1,38 +1,36 @@
 """
-LLM client wrapper for Anthropic Claude.
+LLM client wrapper for Google Gemini.
 
-Provides a clean interface for making LLM calls with:
-- Structured output support (JSON mode)
-- Streaming support
-- Error handling
-- Token counting (for observability)
+Uses gemini-3.5-flash (free tier available via Google AI Studio).
+Simple, no complex streaming or structured output needed for v1.
 """
 
-from typing import Optional, List, Dict, Any, AsyncIterator
-import json
-import anthropic
+from typing import Optional, List, Dict, Any
+from google import genai
+from google.genai import types
 
 from app.core.config import settings
 
 
 class LLMClient:
     """
-    Wrapper for Anthropic Claude API.
-
-    Uses claude-sonnet for drafting (good balance of quality and speed).
-    For evaluation or simpler tasks, could use claude-haiku.
+    Wrapper for Google Gemini API using the google-genai SDK.
     """
 
     def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
-        self.api_key = api_key or settings.anthropic_api_key
-        self.model = model or "claude-sonnet-4-20250514"  # Latest Sonnet
-        self.client = anthropic.AsyncAnthropic(api_key=self.api_key) if self.api_key else None
+        self.api_key = api_key or settings.gemini_api_key
+        self.model = model or settings.llm_model
+
+        if self.api_key:
+            self.client = genai.Client(api_key=self.api_key)
+        else:
+            self.client = None
 
     async def generate(
         self,
         system: str,
         messages: List[Dict[str, str]],
-        max_tokens: int = 4096,
+        max_tokens: int = 2048,
         temperature: float = 0.7
     ) -> str:
         """
@@ -51,78 +49,34 @@ class LLMClient:
             ValueError: If API key not configured
         """
         if not self.client:
-            raise ValueError("Anthropic API key not configured. Set ANTHROPIC_API_KEY environment variable.")
+            raise ValueError("Gemini API key not configured. Set GEMINI_API_KEY environment variable.")
 
-        response = await self.client.messages.create(
-            model=self.model,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            system=system,
-            messages=messages
-        )
-
-        return response.content[0].text
-
-    async def generate_json(
-        self,
-        system: str,
-        messages: List[Dict[str, str]],
-        max_tokens: int = 2048,
-        temperature: float = 0.3
-    ) -> Dict[str, Any]:
-        """
-        Generate a JSON completion from the LLM.
-
-        Lower temperature for more deterministic structured output.
-        Parses the response as JSON.
-
-        Returns:
-            Parsed JSON object
-        """
-        text = await self.generate(system, messages, max_tokens, temperature)
-
-        # Try to extract JSON from the response
-        # Sometimes the model wraps it in markdown code blocks
-        if "```json" in text:
-            start = text.find("```json") + 7
-            end = text.find("```", start)
-            text = text[start:end].strip()
-        elif "```" in text:
-            start = text.find("```") + 3
-            end = text.find("```", start)
-            text = text[start:end].strip()
+        # Build contents from messages
+        contents = []
+        for msg in messages:
+            role = msg.get("role", "user")
+            # Gemini uses "user" and "model" roles
+            if role == "assistant":
+                role = "model"
+            contents.append(types.Content(
+                role=role,
+                parts=[types.Part(text=msg["content"])]
+            ))
 
         try:
-            return json.loads(text)
-        except json.JSONDecodeError:
-            # Return raw text in a fallback structure
-            return {"raw_response": text, "parse_error": True}
-
-    async def stream(
-        self,
-        system: str,
-        messages: List[Dict[str, str]],
-        max_tokens: int = 4096,
-        temperature: float = 0.7
-    ) -> AsyncIterator[str]:
-        """
-        Stream the completion token by token.
-
-        Yields:
-            Individual text chunks
-        """
-        if not self.client:
-            raise ValueError("Anthropic API key not configured.")
-
-        async with self.client.messages.stream(
-            model=self.model,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            system=system,
-            messages=messages
-        ) as stream:
-            async for text in stream.text_stream:
-                yield text
+            response = self.client.models.generate_content(
+                model=self.model,
+                contents=contents,
+                config=types.GenerateContentConfig(
+                    system_instruction=system,
+                    max_output_tokens=max_tokens,
+                    temperature=temperature
+                )
+            )
+            return response.text
+        except Exception as e:
+            print(f"LLM generation error: {e}")
+            return f"Error: {str(e)}"
 
 
 # Global instance

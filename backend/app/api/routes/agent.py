@@ -1,13 +1,12 @@
 """
-Agent API routes - cover letter generation and drafting.
+Agent API routes - simple chat and cover letter generation.
 
-These endpoints orchestrate the RAG retrieval + LLM generation flow.
+Uses RAG retrieval + Gemini LLM. No complex tools or agent loops.
 """
 
-from typing import Optional
+from typing import Optional, List
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 import json
@@ -15,8 +14,8 @@ import json
 from app.core.database import get_db
 from app.core.auth import get_current_user
 from app.models.user import User, Job, GeneratedDraft
-from app.agent.drafting import generate_cover_letter, DraftResult
-from app.agent.llm import get_llm_client
+from app.agent.cover_letter import generate_cover_letter
+from app.agent.simple_agent import chat_with_agent
 from sqlalchemy import select
 
 router = APIRouter(prefix="/agent", tags=["agent"])
@@ -25,22 +24,31 @@ router = APIRouter(prefix="/agent", tags=["agent"])
 # Request/Response schemas
 class DraftRequest(BaseModel):
     job_id: str
-    draft_type: str = "cover_letter"
-    include_critique: bool = False
 
 
 class DraftResponse(BaseModel):
     draft_id: str
     content: str
-    retrieved_chunk_ids: list[str]
-    requirements: dict
-    critique: Optional[dict] = None
+    retrieved_chunks: int
+    chunk_ids: List[str]
 
 
 class StreamProgress(BaseModel):
     step: str
     message: str
     data: Optional[dict] = None
+
+
+class ChatRequest(BaseModel):
+    message: str
+    conversation_history: Optional[List[dict]] = None
+    job_id: Optional[str] = None
+
+
+class ChatResponse(BaseModel):
+    response: str
+    retrieved_chunks: int
+    context_used: List[str]
 
 
 @router.post("/draft", response_model=DraftResponse, status_code=status.HTTP_201_CREATED)
@@ -52,13 +60,11 @@ async def create_draft(
     """
     Generate a cover letter draft for a job.
 
-    This endpoint:
-    1. Extracts requirements from the job description
-    2. Retrieves relevant experience via hybrid RAG
-    3. Generates a tailored cover letter
-    4. Optionally runs self-critique
+    Simple RAG flow:
+    1. Retrieve relevant experience via hybrid search
+    2. Generate cover letter with that context
 
-    Returns the draft with traceability info (which chunks were used).
+    Returns the draft with traceability info.
     """
     try:
         job_uuid = UUID(request.job_id)
@@ -84,8 +90,7 @@ async def create_draft(
         draft_result = await generate_cover_letter(
             db=db,
             job_id=job_uuid,
-            user_id=current_user.id,
-            include_critique=request.include_critique
+            user_id=current_user.id
         )
     except Exception as e:
         raise HTTPException(
@@ -94,11 +99,10 @@ async def create_draft(
         )
 
     return DraftResponse(
-        draft_id=draft_result.draft_id or "",
-        content=draft_result.content,
-        retrieved_chunk_ids=draft_result.retrieved_chunk_ids,
-        requirements=draft_result.requirements,
-        critique=draft_result.critique
+        draft_id=draft_result["draft_id"],
+        content=draft_result["content"],
+        retrieved_chunks=draft_result["retrieved_chunks"],
+        chunk_ids=draft_result["chunk_ids"]
     )
 
 
@@ -110,11 +114,6 @@ async def stream_draft(
 ):
     """
     Stream the draft generation process with progress updates.
-
-    This is useful for showing real-time progress in the UI:
-    - "Analyzing job description..."
-    - "Retrieving relevant experience..."
-    - "Generating cover letter..."
 
     Uses Server-Sent Events (SSE) format.
     """
@@ -141,34 +140,27 @@ async def stream_draft(
     async def generate_stream():
         """Generator that yields SSE-formatted progress updates."""
         try:
-            # Step 1: Extract requirements
-            yield f"data: {json.dumps({'step': 'parse', 'message': 'Analyzing job description...'})}\n\n"
-
-            # Step 2: Retrieve experience
             yield f"data: {json.dumps({'step': 'retrieve', 'message': 'Searching your experience...'})}\n\n"
 
-            # Generate the draft
             draft_result = await generate_cover_letter(
                 db=db,
                 job_id=job_uuid,
-                user_id=current_user.id,
-                include_critique=request.include_critique
+                user_id=current_user.id
             )
 
-            # Step 3: Generation complete
             yield f"data: {json.dumps({'step': 'generate', 'message': 'Generating cover letter...'})}\n\n"
 
-            # Final result
             final_data = {
-                'draft_id': draft_result.draft_id,
-                'content': draft_result.content,
-                'retrieved_chunk_ids': draft_result.retrieved_chunk_ids
+                'draft_id': draft_result['draft_id'],
+                'content': draft_result['content'],
+                'retrieved_chunk_ids': draft_result['chunk_ids']
             }
             yield f"data: {json.dumps({'step': 'complete', 'message': 'Done!', 'data': final_data})}\n\n"
 
         except Exception as e:
             yield f"data: {json.dumps({'step': 'error', 'message': str(e)})}\n\n"
 
+    from fastapi.responses import StreamingResponse
     return StreamingResponse(
         generate_stream(),
         media_type="text/event-stream",
@@ -216,11 +208,6 @@ async def update_draft(
 ):
     """
     Update a draft with user edits.
-
-    This is important for the long-term memory system:
-    - User edits are stored in user_edited_content
-    - A background process extracts style preferences from edits
-    - Future drafts can reference these learned preferences
     """
     result = await db.execute(
         select(GeneratedDraft).where(GeneratedDraft.id == draft_id)
@@ -238,5 +225,47 @@ async def update_draft(
 
     return {
         "id": str(draft.id),
-        "message": "Draft updated. Style preferences will be learned from your edits."
+        "message": "Draft updated."
     }
+
+
+@router.post("/chat", response_model=ChatResponse)
+async def chat_endpoint(
+    request: ChatRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Chat with the AI agent (simple RAG chat).
+
+    Retrieves relevant experience from your documents and generates a response.
+    """
+    job_uuid = None
+    if request.job_id:
+        try:
+            job_uuid = UUID(request.job_id)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid job_id format"
+            )
+
+    try:
+        result = await chat_with_agent(
+            db=db,
+            user_id=current_user.id,
+            message=request.message,
+            conversation_history=request.conversation_history,
+            job_id=job_uuid
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error in chat: {str(e)}"
+        )
+
+    return ChatResponse(
+        response=result["response"],
+        retrieved_chunks=result["retrieved_chunks"],
+        context_used=result["context_used"]
+    )

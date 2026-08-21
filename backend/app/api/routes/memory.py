@@ -1,10 +1,7 @@
 """
-Memory API routes.
+Simple memory API routes - chat history only.
 
-Endpoints for:
-- Chat history (short-term memory)
-- Style preferences (long-term memory)
-- Updating style from user edits
+Removes complex long-term memory with embeddings - just basic chat history.
 """
 
 from typing import List, Optional
@@ -13,30 +10,21 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 
 from app.core.database import get_db
 from app.core.auth import get_current_user
-from app.models.user import User, ChatMessage, StyleMemory, GeneratedDraft
-from app.agent.memory import (
-    ShortTermMemory,
-    LongTermMemory,
-    update_style_from_edit,
-    build_style_context
-)
-
+from app.models.user import User, ChatMessage
 
 router = APIRouter(prefix="/memory", tags=["memory"])
 
 
 # Request/Response models
-
 class ChatMessageResponse(BaseModel):
     """Chat message response."""
     id: str
     role: str
     content: str
-    tool_calls: Optional[list] = None
-    tool_call_id: Optional[str] = None
     created_at: str
 
 
@@ -46,40 +34,17 @@ class ChatHistoryResponse(BaseModel):
     messages: List[ChatMessageResponse]
 
 
-class StylePreferenceResponse(BaseModel):
-    """Style preference response."""
+class SaveMessageRequest(BaseModel):
+    """Request to save a chat message."""
+    session_id: UUID
+    role: str
+    content: str
+
+
+class SaveMessageResponse(BaseModel):
+    """Response from saving a message."""
     id: str
-    preference_text: str
-    source_draft_id: Optional[str] = None
-    created_at: str
-
-
-class StylePreferencesResponse(BaseModel):
-    """List of style preferences."""
-    preferences: List[StylePreferenceResponse]
-
-
-class UpdateStyleRequest(BaseModel):
-    """Request to update style from edit."""
-    draft_id: UUID
-    original_content: str
-    edited_content: str
-
-
-class UpdateStyleResponse(BaseModel):
-    """Response from style update."""
-    updated: bool
-    preference_text: Optional[str] = None
-
-
-class StyleContextRequest(BaseModel):
-    """Request to get style context for a job."""
-    job_description: str
-
-
-class StyleContextResponse(BaseModel):
-    """Style context response."""
-    context: str
+    message: str
 
 
 # Routes
@@ -96,22 +61,48 @@ async def get_chat_history(
 
     Returns messages in chronological order.
     """
-    memory = ShortTermMemory(db)
-    history = await memory.get_history(session_id, current_user.id, limit)
+    result = await db.execute(
+        select(ChatMessage)
+        .where(ChatMessage.session_id == session_id)
+        .where(ChatMessage.user_id == current_user.id)
+        .order_by(ChatMessage.created_at.asc())
+        .limit(limit)
+    )
+    messages = result.scalars().all()
 
     return ChatHistoryResponse(
         session_id=str(session_id),
         messages=[
             ChatMessageResponse(
-                id=str(m.id) if hasattr(m, 'id') else "",
+                id=str(m.id),
                 role=m.role,
                 content=m.content,
-                tool_calls=m.tool_calls,
-                tool_call_id=m.tool_call_id,
-                created_at=""  # Not available in ChatHistoryEntry
+                created_at=m.created_at.isoformat()
             )
-            for m in history
+            for m in messages
         ]
+    )
+
+
+@router.post("/chat", response_model=SaveMessageResponse)
+async def save_chat_message(
+    request: SaveMessageRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Save a chat message to history."""
+    message = ChatMessage(
+        session_id=request.session_id,
+        user_id=current_user.id,
+        role=request.role,
+        content=request.content
+    )
+    db.add(message)
+    await db.flush()
+
+    return SaveMessageResponse(
+        id=str(message.id),
+        message="Saved"
     )
 
 
@@ -121,91 +112,17 @@ async def clear_chat_history(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """
-    Clear chat history for a session.
-    """
-    memory = ShortTermMemory(db)
-    count = await memory.clear_history(session_id, current_user.id)
-    return {"deleted": count}
-
-
-@router.get("/style", response_model=StylePreferencesResponse)
-async def get_style_preferences(
-    limit: int = 20,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
-):
-    """
-    Get all style preferences for the current user.
-
-    Returns most recent first.
-    """
-    memory = LongTermMemory(db)
-    preferences_text = await memory.get_all_preferences(current_user.id, limit)
-
-    # We need to get full records to include IDs and timestamps
+    """Clear chat history for a session."""
     result = await db.execute(
-        select(StyleMemory)
-        .where(StyleMemory.user_id == current_user.id)
-        .order_by(StyleMemory.created_at.desc())
-        .limit(limit)
+        select(ChatMessage)
+        .where(ChatMessage.session_id == session_id)
+        .where(ChatMessage.user_id == current_user.id)
     )
-    preferences = result.scalars().all()
+    messages = result.scalars().all()
+    count = len(messages)
 
-    return StylePreferencesResponse(
-        preferences=[
-            StylePreferenceResponse(
-                id=str(p.id),
-                preference_text=p.preference_text,
-                source_draft_id=str(p.source_draft_id) if p.source_draft_id else None,
-                created_at=p.created_at.isoformat()
-            )
-            for p in preferences
-        ]
-    )
+    for m in messages:
+        await db.delete(m)
+    await db.flush()
 
-
-@router.post("/style/update", response_model=UpdateStyleResponse)
-async def update_style_preference(
-    request: UpdateStyleRequest,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
-):
-    """
-    Update long-term memory from a user edit.
-
-    Call this when the user saves an edited draft.
-    """
-    updated = await update_style_from_edit(
-        db=db,
-        user_id=current_user.id,
-        draft_id=request.draft_id,
-        original_content=request.original_content,
-        edited_content=request.edited_content
-    )
-
-    if updated:
-        # Get the preference that was created
-        memory = LongTermMemory(db)
-        prefs = await memory.get_all_preferences(current_user.id, 1)
-        return UpdateStyleResponse(
-            updated=True,
-            preference_text=prefs[0] if prefs else None
-        )
-
-    return UpdateStyleResponse(updated=False)
-
-
-@router.post("/style/context", response_model=StyleContextResponse)
-async def get_style_context(
-    request: StyleContextRequest,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
-):
-    """
-    Get relevant style context for a job description.
-
-    Returns formatted style preferences to include in prompts.
-    """
-    context = await build_style_context(db, current_user.id, request.job_description)
-    return StyleContextResponse(context=context)
+    return {"deleted": count}

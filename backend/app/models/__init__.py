@@ -10,7 +10,6 @@ from app.models.user import (
     Application,
     GeneratedDraft,
     ChatMessage,
-    StyleMemory,
 )
 
 __all__ = [
@@ -21,5 +20,4 @@ __all__ = [
     "Application",
     "GeneratedDraft",
     "ChatMessage",
-    "StyleMemory",
 ]

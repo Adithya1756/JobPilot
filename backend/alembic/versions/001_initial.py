@@ -1,8 +1,8 @@
-"""Initial schema with pgvector
+"""Initial schema with pgvector - simplified for Gemini free tier
 
 Revision ID: 001_initial
 Revises:
-Create Date: 2026-08-19
+Create Date: 2026-08-20
 
 """
 from typing import Sequence, Union
@@ -47,14 +47,14 @@ def upgrade() -> None:
     )
     op.create_index('ix_source_documents_user_id', 'source_documents', ['user_id'])
 
-    # Chunks table with vector column
+    # Chunks table with vector column (768 dims for Gemini text-embedding-004)
     op.create_table(
         'chunks',
         sa.Column('id', UUID(as_uuid=True), primary_key=True),
         sa.Column('source_document_id', UUID(as_uuid=True), sa.ForeignKey('source_documents.id', ondelete='CASCADE'), nullable=False),
         sa.Column('user_id', UUID(as_uuid=True), sa.ForeignKey('users.id', ondelete='CASCADE'), nullable=False),
         sa.Column('content', sa.Text, nullable=False),
-        sa.Column('embedding', Vector(1536)),
+        sa.Column('embedding', Vector(768)),
         sa.Column('tsv', sa.Text),
         sa.Column('metadata', JSONB),
         sa.Column('created_at', sa.DateTime, server_default=sa.func.now()),
@@ -122,7 +122,7 @@ def upgrade() -> None:
     op.create_table(
         'generated_drafts',
         sa.Column('id', UUID(as_uuid=True), primary_key=True),
-        sa.Column('application_id', UUID(as_uuid=True), sa.ForeignKey('applications.id', ondelete='CASCADE'), nullable=False),
+        sa.Column('application_id', UUID(as_uuid=True), sa.ForeignKey('applications.id', ondelete='CASCADE'), nullable=True),
         sa.Column('draft_type', sa.String(50), nullable=False),
         sa.Column('content', sa.Text, nullable=False),
         sa.Column('prompt_version', sa.String(50)),
@@ -139,34 +139,12 @@ def upgrade() -> None:
         sa.Column('user_id', UUID(as_uuid=True), sa.ForeignKey('users.id', ondelete='CASCADE'), nullable=False),
         sa.Column('role', sa.String(50), nullable=False),
         sa.Column('content', sa.Text, nullable=False),
-        sa.Column('tool_calls', JSONB),
-        sa.Column('tool_call_id', sa.String(100)),
         sa.Column('created_at', sa.DateTime, server_default=sa.func.now()),
     )
     op.create_index('ix_chat_messages_session_id', 'chat_messages', ['session_id'])
 
-    # Style memory table
-    op.create_table(
-        'style_memory',
-        sa.Column('id', UUID(as_uuid=True), primary_key=True),
-        sa.Column('user_id', UUID(as_uuid=True), sa.ForeignKey('users.id', ondelete='CASCADE'), nullable=False),
-        sa.Column('preference_text', sa.Text, nullable=False),
-        sa.Column('embedding', Vector(1536)),
-        sa.Column('source_draft_id', UUID(as_uuid=True), sa.ForeignKey('generated_drafts.id', ondelete='SET NULL')),
-        sa.Column('created_at', sa.DateTime, server_default=sa.func.now()),
-    )
-    op.create_index('ix_style_memory_user_id', 'style_memory', ['user_id'])
-
-    # Vector index for style memory
-    op.execute("""
-        CREATE INDEX IF NOT EXISTS style_memory_embedding_idx
-        ON style_memory
-        USING hnsw (embedding vector_cosine_ops)
-    """)
-
 
 def downgrade() -> None:
-    op.drop_table('style_memory')
     op.drop_table('chat_messages')
     op.drop_table('generated_drafts')
     op.drop_table('applications')

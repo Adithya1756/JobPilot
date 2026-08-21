@@ -1,33 +1,19 @@
 """
-Agent package - LLM agent with tools.
+Simple agent package - RAG-based chat and cover letter generation.
 
-The agent is the core of JobPilot's intelligence:
-- Takes a job description as input
-- Retrieves relevant experience via RAG
-- Generates tailored application materials
-- Uses tools (web search, calendar, email)
-
-Week 2: Basic drafting with RAG retrieval
-Week 4: Full agent loop with tool calling
+Uses Google Gemini (free tier) for both embeddings and LLM.
+No complex tool loops, no external paid APIs.
 """
 
 from app.agent.llm import LLMClient, get_llm_client
-from app.agent.drafting import DraftingAgent, generate_cover_letter, DraftResult
-from app.agent.prompts import (
-    COVER_LETTER_SYSTEM,
-    COVER_LETTER_USER,
-    EXTRACT_REQUIREMENTS_SYSTEM,
-    CRITIQUE_SYSTEM,
-)
+from app.agent.simple_agent import SimpleAgent, chat_with_agent
+from app.agent.cover_letter import SimpleCoverLetterGenerator, generate_cover_letter
 
 __all__ = [
     "LLMClient",
     "get_llm_client",
-    "DraftingAgent",
+    "SimpleAgent",
+    "chat_with_agent",
+    "SimpleCoverLetterGenerator",
     "generate_cover_letter",
-    "DraftResult",
-    "COVER_LETTER_SYSTEM",
-    "COVER_LETTER_USER",
-    "EXTRACT_REQUIREMENTS_SYSTEM",
-    "CRITIQUE_SYSTEM",
 ]

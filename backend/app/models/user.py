@@ -1,6 +1,6 @@
 """
 SQLAlchemy models for JobPilot.
-Mirrors the schema from the project specification.
+Simplified version using Google Gemini embeddings (768 dimensions).
 """
 
 import uuid
@@ -36,7 +36,6 @@ class User(Base):
     documents = relationship("SourceDocument", back_populates="user", cascade="all, delete-orphan")
     jobs = relationship("Job", back_populates="user", cascade="all, delete-orphan")
     applications = relationship("Application", back_populates="user", cascade="all, delete-orphan")
-    style_memories = relationship("StyleMemory", back_populates="user", cascade="all, delete-orphan")
 
     def __repr__(self):
         return f"<User {self.email}>"
@@ -81,16 +80,13 @@ class Chunk(Base):
     source_document_id = Column(UUID(as_uuid=True), ForeignKey("source_documents.id", ondelete="CASCADE"), nullable=False)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     content = Column(Text, nullable=False)
-    embedding = Column(Vector(1536))  # OpenAI text-embedding-3-small dimensions
+    embedding = Column(Vector(768))  # Gemini text-embedding-004 dimensions
     tsv = Column(Text)  # tsvector for full-text search (populated via trigger)
     chunk_metadata = Column("metadata", JSONB)  # {section: "experience", company: "X", dates: "..."}
     created_at = Column(DateTime, default=datetime.utcnow)
 
     # Relationships
     source_document = relationship("SourceDocument", back_populates="chunks")
-
-    # Note: We'll create the GIN index on tsv via Alembic migration
-    # Note: We'll create the vector index via Alembic migration
 
     def __repr__(self):
         return f"<Chunk {self.id} from {self.source_document_id}>"
@@ -158,12 +154,12 @@ class GeneratedDraft(Base):
     __tablename__ = "generated_drafts"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    application_id = Column(UUID(as_uuid=True), ForeignKey("applications.id", ondelete="CASCADE"), nullable=False)
+    application_id = Column(UUID(as_uuid=True), ForeignKey("applications.id", ondelete="CASCADE"), nullable=True)
     draft_type = Column(String(50), nullable=False)  # cover_letter, qa_answer, follow_up_email
     content = Column(Text, nullable=False)
     prompt_version = Column(String(50))  # Track which prompt template was used
     retrieved_chunk_ids = Column(JSONB)  # List of chunk UUIDs used - for traceability/eval
-    user_edited_content = Column(Text)  # User's final edit - feeds long-term memory
+    user_edited_content = Column(Text)  # User's final edit
     created_at = Column(DateTime, default=datetime.utcnow)
 
     # Relationships
@@ -180,32 +176,9 @@ class ChatMessage(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     session_id = Column(UUID(as_uuid=True), nullable=False, index=True)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    role = Column(String(50), nullable=False)  # user, assistant, tool
+    role = Column(String(50), nullable=False)  # user, assistant
     content = Column(Text, nullable=False)
-    tool_calls = Column(JSONB)  # Store tool call details if role=assistant
-    tool_call_id = Column(String(100))  # For tool role messages
     created_at = Column(DateTime, default=datetime.utcnow)
 
     def __repr__(self):
         return f"<ChatMessage {self.role} in session {self.session_id}>"
-
-
-class StyleMemory(Base):
-    """
-    Long-term memory - learned preferences distilled from user edits.
-    Retrieved during future drafts to maintain consistent style.
-    """
-    __tablename__ = "style_memory"
-
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
-    preference_text = Column(Text, nullable=False)
-    embedding = Column(Vector(1536))  # Embedding of the preference
-    source_draft_id = Column(UUID(as_uuid=True), ForeignKey("generated_drafts.id", ondelete="SET NULL"))
-    created_at = Column(DateTime, default=datetime.utcnow)
-
-    # Relationships
-    user = relationship("User", back_populates="style_memories")
-
-    def __repr__(self):
-        return f"<StyleMemory {self.id} for user {self.user_id}>"
